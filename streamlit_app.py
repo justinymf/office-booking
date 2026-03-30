@@ -3,148 +3,98 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 import re
+import requests
+import json
 
 # --- 基礎設定 ---
 st.set_page_config(page_title="Decathlon Office Booking", layout="wide", page_icon="🏢")
 
-# 定義各 Office 容量
+# 填入你剛才部署得到的 Apps Script URL
+SCRIPT_URL = "你的_APPS_SCRIPT_URL_貼在這裡"
+
 OFFICE_CAPACITY = {
     "TKO Office": 20,
     "ST Office": 10,
     "CTR Office": 10
 }
 
-# --- CSS 美化 ---
-st.markdown("""
-    <style>
-    .main {
-        background-color: #f5f7f9;
-    }
-    .stMetric {
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 連接 Google Sheets ---
-# 請確保 .streamlit/secrets.toml 已設定好連結
+# --- 連接 Google Sheets (用於讀取 Dashboard) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_data():
     try:
-        # 注意這裡的 worksheet 名稱要跟 Google Sheet 一樣
-        return conn.read(worksheet="Booking", ttl="0")
-    except Exception:
-        # 如果讀不到資料（例如表單是空的），就回傳一個有標題的空 DataFrame
+        # 讀取時使用 Public URL (Secrets 裡設定的網址)
+        return conn.read(worksheet="Bookings", ttl="0")
+    except:
         return pd.DataFrame(columns=["Date", "Office", "Name", "Email"])
 
 df = get_data()
 
-# 確保 df 不是 None 且包含必要的欄位
-if df is None or df.empty:
-    df = pd.DataFrame(columns=["Date", "Office", "Name", "Email"])
-
-# 取得最新資料
-try:
-    df = get_data()
-except Exception as e:
-    st.error("無法讀取 Google Sheet，請檢查 secrets 設定或網路連線。")
-    df = pd.DataFrame(columns=["Date", "Office", "Name", "Email"])
-
 # --- 側邊欄：預訂表單 ---
-st.sidebar.header("📝 新增辦公室預訂")
+st.sidebar.header("📝 新增預訂")
 
 with st.sidebar.form("booking_form", clear_on_submit=True):
-    user_name = st.text_input("您的姓名 (Name)")
-    user_email = st.text_input("Decathlon Email", placeholder="example@decathlon.com")
-    
+    user_name = st.text_input("您的姓名")
+    user_email = st.text_input("Decathlon Email (name@decathlon.com)")
     selected_date = st.date_input("預訂日期", min_value=datetime.today())
     selected_office = st.selectbox("選擇地點", list(OFFICE_CAPACITY.keys()))
-    
     submit_button = st.form_submit_button("確認提交")
 
     if submit_button:
         date_str = selected_date.strftime("%Y-%m-%d")
         email_pattern = r"^[a-zA-Z0-9._%+-]+@decathlon\.com$"
         
-        # 1. 基本欄位檢查
         if not user_name or not user_email:
             st.sidebar.warning("⚠️ 請填寫所有欄位")
-        
-        # 2. Email 格式檢查
         elif not re.match(email_pattern, user_email.lower()):
-            st.sidebar.error("❌ 格式錯誤！請使用 @decathlon.com 電郵")
-            
+            st.sidebar.error("❌ 請使用 @decathlon.com Email")
         else:
-            # 3. 檢查當天該 Office 是否已滿
-            office_day_data = df[(df['Date'] == date_str) & (df['Office'] == selected_office)]
-            current_count = len(office_day_data)
+            # 檢查是否滿座或重複
+            day_data = df[df['Date'] == date_str]
+            office_count = len(day_data[day_data['Office'] == selected_office])
+            is_duplicate = not day_data[day_data['Email'] == user_email.lower()].empty
             
-            # 4. 檢查同一個人是否重複預訂同一天
-            duplicate_check = df[(df['Date'] == date_str) & (df['Email'] == user_email.lower())]
-            
-            if not duplicate_check.empty:
-                st.sidebar.warning(f"⚠️ 您在 {date_str} 已經有預訂紀錄了")
-                
-            elif current_count >= OFFICE_CAPACITY[selected_office]:
-                st.sidebar.error(f"❌ 很抱歉，{selected_office} 在這天已經滿座！")
-                
+            if is_duplicate:
+                st.sidebar.warning(f"⚠️ 您在 {date_str} 已有預訂")
+            elif office_count >= OFFICE_CAPACITY[selected_office]:
+                st.sidebar.error(f"❌ {selected_office} 已滿座")
             else:
-                # 寫入資料
-                new_data = pd.DataFrame([{
+                # --- 使用 Apps Script API 寫入 ---
+                payload = {
                     "Date": date_str,
                     "Office": selected_office,
                     "Name": user_name,
                     "Email": user_email.lower()
-                }])
-                
-                updated_df = pd.concat([df, new_data], ignore_index=True)
-                conn.update(worksheet="Bookings", data=updated_df)
-                
-                st.sidebar.success(f"🎉 預訂成功！日期：{date_str}")
-                st.rerun()
+                }
+                try:
+                    res = requests.post(SCRIPT_URL, data=json.dumps(payload))
+                    if res.status_code == 200:
+                        st.sidebar.success("🎉 預訂成功！")
+                        st.rerun()
+                    else:
+                        st.sidebar.error("寫入失敗，請檢查 Script 權限")
+                except Exception as e:
+                    st.sidebar.error(f"連線錯誤: {e}")
 
 # --- 主畫面：Dashboard ---
 st.title("📊 Office Occupancy Dashboard")
-
-# 日期篩選器
-view_date = st.date_input("查看特定日期狀況", value=datetime.today())
+view_date = st.date_input("查看日期", value=datetime.today())
 view_date_str = view_date.strftime("%Y-%m-%d")
 
-st.divider()
-
-# 顯示三間 Office 的數據
-cols = st.columns(3)
 day_data = df[df['Date'] == view_date_str]
+cols = st.columns(3)
 
-for i, (office, capacity) in enumerate(OFFICE_CAPACITY.items()):
+for i, (office, cap) in enumerate(OFFICE_CAPACITY.items()):
     booked = len(day_data[day_data['Office'] == office])
-    vacant = capacity - booked
-    occupancy_rate = (booked / capacity) * 100
-    
+    vacant = cap - booked
     with cols[i]:
         st.subheader(office)
-        # 使用 Metric 顯示人數
-        st.metric(label="已預訂 / 總位子", value=f"{booked} / {capacity}", delta=f"剩餘 {vacant}", delta_color="normal")
-        
-        # 進度條顯示擁擠程度
-        bar_color = "green" if occupancy_rate < 80 else "red"
-        st.progress(booked / capacity)
-        st.caption(f"目前佔用率: {occupancy_rate:.1f}%")
+        st.metric("已預訂", f"{booked} / {cap}", f"剩餘 {vacant}")
+        st.progress(booked / cap)
 
-# --- 預訂明細表 ---
 st.divider()
-st.subheader(f"📅 {view_date_str} 預訂清單")
-
+st.subheader(f"📅 {view_date_str} 預訂名單")
 if not day_data.empty:
-    # 隱藏 Email 欄位以保護隱私，只顯示地點與姓名
-    display_df = day_data[day_data['Office'].isin(OFFICE_CAPACITY.keys())][['Office', 'Name']]
-    st.dataframe(display_df.sort_values("Office"), use_container_width=True)
+    st.dataframe(day_data[['Office', 'Name']], use_container_width=True)
 else:
-    st.info("💡 當天目前沒有任何預訂。")
-
-# --- 底部頁尾 ---
-st.caption("Developed for Decathlon Team | Data synced with Google Sheets")
+    st.info("當天暫無預訂。")
