@@ -10,7 +10,7 @@ import json
 st.set_page_config(page_title="Decathlon Office Booking", layout="wide", page_icon="🏢")
 
 # 填入你剛才部署得到的 Apps Script URL
-SCRIPT_URL = "你的_APPS_SCRIPT_URL_貼在這裡"
+SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwm1a1V2mAO9Y-L5oHXFo34AsGkh5U41qvwEOcFkgC9dKm5O_UdkC2SLpn6o-dvGusmPg/exec"
 
 OFFICE_CAPACITY = {
     "TKO Office": 20,
