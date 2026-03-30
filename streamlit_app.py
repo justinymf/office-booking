@@ -34,8 +34,18 @@ st.markdown("""
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_data():
-    # ttl=0 代表不緩存，每次重新整理都抓最新資料
-    return conn.read(worksheet="Bookings", ttl="0")
+    try:
+        # 注意這裡的 worksheet 名稱要跟 Google Sheet 一樣
+        return conn.read(worksheet="Booking", ttl="0")
+    except Exception:
+        # 如果讀不到資料（例如表單是空的），就回傳一個有標題的空 DataFrame
+        return pd.DataFrame(columns=["Date", "Office", "Name", "Email"])
+
+df = get_data()
+
+# 確保 df 不是 None 且包含必要的欄位
+if df is None or df.empty:
+    df = pd.DataFrame(columns=["Date", "Office", "Name", "Email"])
 
 # 取得最新資料
 try:
